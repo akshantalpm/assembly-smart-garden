@@ -1,5 +1,6 @@
 package org.tw.rpi.assemblysmartgardenassembly
 
+import akka.actor.typed.ActorRef
 import akka.actor.typed.scaladsl.ActorContext
 import akka.util.Timeout
 import com.amazonaws.services.iot.client.{AWSIotMessage, AWSIotQos}
@@ -14,7 +15,9 @@ import csw.services.command.scaladsl.{CommandResponseManager, CommandService}
 import csw.services.event.scaladsl.EventService
 import csw.services.location.scaladsl.LocationService
 import csw.services.logging.scaladsl.LoggerFactory
+import org.tw.rpi.assemblysmartgardenassembly.WorkerActorMsgs.{Publish, Start, Status, Subscribe}
 import play.api.libs.json.Json
+import akka.pattern.ask
 
 import scala.concurrent.duration.DurationDouble
 import scala.concurrent.{ExecutionContextExecutor, Future}
@@ -45,8 +48,8 @@ class AssemblysmartgardenAssemblyHandlers(
 
   implicit val ec: ExecutionContextExecutor = ctx.executionContext
   private val log                           = loggerFactory.getLogger
-  private val awsMqttClient                 = new AwsMqttClient()
-
+  private val ALARM_TIME_TOPIC              = "alarmTime"
+  private val DEVICE_PREFERENCES_TOPIC      = "devicePreferences"
   implicit val timeout = Timeout(5.seconds)
 
   override def initialize(): Future[Unit] = {
@@ -55,16 +58,15 @@ class AssemblysmartgardenAssemblyHandlers(
     resolveHcd().map {
       case Some(hcd) ⇒
         val commandService = new CommandService(hcd)(ctx.system)
-
-        if(!awsMqttClient.isConnected) {
-           awsMqttClient.init(mqttCallback(commandService))
-        }
+        val worker: ActorRef[WorkerActorMsg] = ctx.spawnAnonymous(WorkerActor.make(commandService))
+        worker ! Start
+        worker ! Subscribe(Set(ALARM_TIME_TOPIC, DEVICE_PREFERENCES_TOPIC))
 
         commandService.subscribeCurrentState { currentState =>
           val payload = currentState.parameter(KeyType.StringKey.make("data")).items.headOption
 
           payload match {
-            case Some(data) => awsMqttClient.publish(currentState.stateName.name, data)
+            case Some(data) => worker ! Publish(currentState.stateName.name, data)
             case None       =>  println("Not received")
           }
         }
@@ -72,11 +74,6 @@ class AssemblysmartgardenAssemblyHandlers(
     }
 
     Future.successful({})
-  }
-
-  private def mqttCallback(commandService: CommandService) = { (message: AWSIotMessage, topic: String) =>
-    val param = KeyType.StringKey.make("data").set(message.getStringPayload)
-    commandService.oneway(Observe(Prefix("dms.topic.data"), CommandName(topic), null).madd(param))
   }
 
   private def resolveHcd(): Future[Option[AkkaLocation]] = {

@@ -9,20 +9,15 @@ import play.api.libs.json.Json
 
 import scala.concurrent.Future
 
-class AwsMqttClient {
+object AwsMqttClient {
 
   private val config = ConfigFactory.load()
-  private val ALARM_TIME_TOPIC              = "alarmTime"
-  private val DEVICE_PREFERENCES_TOPIC      = "devicePreferences"
-
   private val pair = SampleUtil.getKeyStorePasswordPair(config.getString("certificateFile"), config.getString("privateKeyFile"))
   private val client =
     new AWSIotMqttClient(config.getString("clientEndpoint"), MqttClient.generateClientId(), pair.keyStore, pair.keyPassword)
 
-  def init(mqttCallback: (AWSIotMessage, String) => Future[CommandResponse]) = {
+  def init() = {
     client.connect()
-    client.subscribe(new AwsMqttTopic(ALARM_TIME_TOPIC, AWSIotQos.QOS0, mqttCallback))
-    client.subscribe(new AwsMqttTopic(DEVICE_PREFERENCES_TOPIC, AWSIotQos.QOS0, mqttCallback))
   }
 
   def isConnected = client.getConnectionStatus == AWSIotConnectionStatus.CONNECTED
